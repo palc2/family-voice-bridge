@@ -594,14 +594,14 @@ export default function SessionRecorder({
   };
 
   return (
-    <div className="flex flex-col items-center justify-center w-full p-0.5 sm:p-1">
-      <div className="w-full max-w-md space-y-1.5 sm:space-y-2 md:space-y-3">
+    <div className="flex flex-col items-center justify-center w-full p-0 sm:p-0.5">
+      <div className="w-full max-w-md space-y-1 sm:space-y-1.5 md:space-y-2">
         {/* Status Display */}
         <div className="text-center">
           {state === 'idle' && (
-            <p className="text-lg sm:text-xl md:text-2xl text-gray-600 mb-2 sm:mb-3 font-medium">
+            <p className="text-lg sm:text-xl md:text-2xl text-gray-600 mb-1 sm:mb-2 font-medium">
               <span className="block">开始对话</span>
-              <span className="block text-sm sm:text-base md:text-lg text-gray-500 mt-1 font-normal">Ready to speak?</span>
+              <span className="block text-sm sm:text-base md:text-lg text-gray-500 mt-0.5 font-normal">Ready to speak?</span>
             </p>
           )}
           {state === 'recording-mom' && (
@@ -722,20 +722,20 @@ export default function SessionRecorder({
 
         {/* Main Buttons */}
         {state === 'idle' && (
-          <div className="space-y-2 sm:space-y-3">
+          <div className="space-y-1 sm:space-y-2">
             <button
               onClick={startSession}
-              className="w-full py-4 sm:py-5 md:py-6 px-4 sm:px-6 bg-green-600 hover:bg-green-700 text-white text-xl sm:text-2xl md:text-3xl font-bold rounded-lg shadow-lg transition-colors"
+              className="w-full py-3 sm:py-4 md:py-5 px-4 sm:px-6 bg-green-600 hover:bg-green-700 text-white text-xl sm:text-2xl md:text-3xl font-bold rounded-lg shadow-lg transition-colors"
             >
               <span className="block">说中文</span>
-              <span className="block text-lg sm:text-xl md:text-2xl mt-0.5 sm:mt-1">Speak Chinese</span>
+              <span className="block text-lg sm:text-xl md:text-2xl mt-0 sm:mt-0.5">Speak Chinese</span>
             </button>
             <button
               onClick={startListenForEnglish}
-              className="w-full py-3 sm:py-4 md:py-5 px-4 sm:px-6 bg-blue-500 hover:bg-blue-600 text-white text-base sm:text-lg md:text-xl font-semibold rounded-lg shadow-md transition-colors"
+              className="w-full py-2 sm:py-3 md:py-4 px-4 sm:px-6 bg-blue-500 hover:bg-blue-600 text-white text-base sm:text-lg md:text-xl font-semibold rounded-lg shadow-md transition-colors"
             >
               <span className="block">听英文</span>
-              <span className="block text-sm sm:text-base md:text-lg mt-0.5 sm:mt-1">Listen for English</span>
+              <span className="block text-sm sm:text-base md:text-lg mt-0 sm:mt-0.5">Listen for English</span>
             </button>
           </div>
         )}

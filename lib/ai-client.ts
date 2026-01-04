@@ -233,7 +233,7 @@ export async function translateText(
   text: string,
   sourceLang: 'zh-CN' | 'en-US',
   targetLang: 'zh-CN' | 'en-US',
-  model: 'gpt-5' | 'gemini-2.5-pro' = 'gpt-5'
+  model: 'deepseek' | 'gpt-5' | 'gemini-2.5-pro' = 'deepseek'
 ): Promise<{ translatedText: string; requestId: string }> {
   const apiKey = getApiKey();
 
@@ -247,38 +247,30 @@ export async function translateText(
   let systemPrompt: string;
   if (sourceLang === 'zh-CN' && targetLang === 'en-US') {
     systemPrompt =
-      'You are a precise translator from Chinese to natural spoken English. Keep responses short and conversational. Do not add explanations.';
+      'Translate Chinese to natural spoken English. Output ONLY the translation. No notes, no quotes.';
   } else if (sourceLang === 'en-US' && targetLang === 'zh-CN') {
     systemPrompt =
-      'You are a precise translator from English to natural, simple spoken Chinese. Use vocabulary appropriate for a 60-year-old Chinese learner. Do not add explanations.';
+      'Translate English to natural Mandarin Chinese. Output ONLY the translation. No notes, no quotes.';
   } else {
     throw new Error(`Unsupported translation: ${sourceLang} -> ${targetLang}`);
   }
 
-  // Optimize for speed: Use gpt-5 (more reliable than gemini-2.5-pro which has token limit issues)
-  // Keep token limit optimized but sufficient for translations
-  const optimizedModel = model; // Use requested model (gpt-5 is more reliable)
-  
-  // Adjust max_tokens based on input length (longer inputs need more output tokens)
-  // Estimate: Chinese chars are ~1 token, English words are ~1.3 tokens
-  // For safety, allocate more tokens for longer inputs
-  // Use 1024 as minimum to avoid API bug where it returns empty content with lower limits
-  // This prevents retry delays (retry added 14s in testing)
-  const estimatedInputTokens = sourceLang === 'zh-CN' ? textLength : Math.ceil(textLength / 4);
-  const maxTokens = Math.min(Math.max(estimatedInputTokens * 3, 1024), 2048); // Between 1024 and 2048 (prevents retry)
+  // Use deepseek model by default for faster, more cost-effective translations
+  const optimizedModel = model;
   
   const requestBody = {
     model: optimizedModel,
+    stream: true,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: text },
     ],
-    temperature: 0.3,
-    max_tokens: maxTokens,
+    temperature: 0,
+    max_tokens: 200,
   };
   
   // Store maxTokens for error handling
-  const finalMaxTokens = maxTokens;
+  const finalMaxTokens = 200;
 
   // Use keep-alive for connection reuse and optimize for speed
   // Dynamic timeout: longer inputs get more time (base 30s + 1s per 100 chars)
@@ -329,57 +321,96 @@ export async function translateText(
     );
   }
 
-  const data: ChatCompletionResponse = await response.json();
-  
-  // Log the full response for debugging
-  console.log('Translation API Response:', {
-    id: data.id,
-    model: data.model,
-    choicesCount: data.choices?.length,
-    firstChoice: data.choices?.[0] ? {
-      index: data.choices[0].index,
-      finishReason: data.choices[0].finish_reason,
-      messageRole: data.choices[0].message?.role,
-      messageContent: data.choices[0].message?.content,
-      messageContentLength: data.choices[0].message?.content?.length,
-      hasToolCalls: !!data.choices[0].message?.tool_calls,
-      toolCallsCount: data.choices[0].message?.tool_calls?.length,
-    } : null,
+  // Handle streaming response (Server-Sent Events format)
+  if (!response.body) {
+    throw new Error('Response body is null');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let translatedText = '';
+  let requestId = '';
+  let finishReason = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || ''; // Keep incomplete line in buffer
+
+      for (const line of lines) {
+        if (line.trim() === '') continue;
+        if (line.startsWith('data: ')) {
+          const data = line.slice(6); // Remove 'data: ' prefix
+          if (data === '[DONE]') {
+            continue;
+          }
+
+          try {
+            const chunk = JSON.parse(data);
+            
+            // Extract request ID from first chunk
+            if (chunk.id && !requestId) {
+              requestId = chunk.id;
+            }
+
+            // Extract text content from delta
+            const delta = chunk.choices?.[0]?.delta;
+            if (delta?.content) {
+              translatedText += delta.content;
+            }
+
+            // Check for finish reason
+            const choice = chunk.choices?.[0];
+            if (choice?.finish_reason) {
+              finishReason = choice.finish_reason;
+            }
+          } catch (parseError) {
+            // Skip malformed JSON chunks
+            console.warn('Failed to parse SSE chunk:', data, parseError);
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  // Log the streaming response for debugging
+  console.log('Translation API Response (streaming):', {
+    id: requestId,
+    model: optimizedModel,
+    translatedTextLength: translatedText.length,
+    finishReason: finishReason,
   });
 
-  let translatedText = data.choices[0]?.message?.content;
-
   if (!translatedText) {
-    // Provide more detailed error information
-    const choice = data.choices?.[0];
-    const message = choice?.message;
-    
-    // Check if it's a token limit issue
-    if (choice?.finish_reason === 'length') {
-      // With max_tokens: 1024, this should rarely happen. If it does, it's likely a real long translation
-      throw new Error(
-        `Translation was cut off due to token limit. ` +
-        `Input: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}" (${textLength} chars). ` +
-        `max_tokens was ${finalMaxTokens}, completion_tokens: ${data.usage?.completion_tokens}. ` +
-        `This may indicate the translation is too long or max_tokens needs adjustment.`
-      );
-    }
-    const finishReason = choice?.finish_reason;
-    const toolCalls = message?.tool_calls;
-    
+    // Provide error information
     let errorDetails = 'Translation response did not contain text.';
     errorDetails += `\nFinish reason: ${finishReason || 'unknown'}`;
-    errorDetails += `\nHas tool calls: ${toolCalls ? 'yes (' + toolCalls.length + ')' : 'no'}`;
-    errorDetails += `\nMessage role: ${message?.role || 'unknown'}`;
-    errorDetails += `\nFull response structure: ${JSON.stringify(data, null, 2)}`;
+    errorDetails += `\nRequest ID: ${requestId || 'unknown'}`;
     
     console.error('Translation response missing text:', errorDetails);
     throw new Error(errorDetails);
   }
 
+  // Check if it's a token limit issue
+  if (finishReason === 'length') {
+    throw new Error(
+      `Translation was cut off due to token limit. ` +
+      `Input: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}" (${textLength} chars). ` +
+      `max_tokens was ${finalMaxTokens}. ` +
+      `This may indicate the translation is too long or max_tokens needs adjustment.`
+    );
+  }
+
   return {
     translatedText,
-    requestId: data.id,
+    requestId: requestId || 'unknown',
   };
 }
 

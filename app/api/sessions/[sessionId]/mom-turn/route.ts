@@ -74,12 +74,11 @@ export async function POST(
       );
     }
 
-    // Step 2: Translate to English (optimized for speed)
+    // Step 2: Translate to English (using deepseek with streaming)
     const translation = await translateText(
       sourceText,
       'zh-CN',
-      'en-US',
-      'gpt-5'
+      'en-US'
     );
 
     // Step 3: Save to conversation_turns (fire and forget - don't wait for DB)

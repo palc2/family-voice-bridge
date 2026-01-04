@@ -76,14 +76,35 @@ function initializePool(): Pool {
   }
 
   // 4. Create the Pool
-  // Neon requires SSL connections. We enforce SSL here.
+  // Neon requires SSL connections. For localhost, SSL is optional.
   console.log('🔌 Creating PostgreSQL connection pool...');
-  pool = new Pool({
+  
+  // Parse URL to check if it's localhost
+  let useSSL = true;
+  try {
+    const url = new URL(databaseUrl);
+    const hostname = url.hostname.toLowerCase();
+    // Skip SSL for localhost, 127.0.0.1, or local development
+    if (hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '::1') {
+      useSSL = false;
+      console.log('📍 Local database detected, SSL disabled');
+    }
+  } catch (e) {
+    // If URL parsing fails, default to SSL (safer for production)
+    console.warn('⚠️ Could not parse DATABASE_URL, defaulting to SSL');
+  }
+  
+  const poolConfig: any = {
     connectionString: databaseUrl,
-    ssl: {
+  };
+  
+  if (useSSL) {
+    poolConfig.ssl = {
       rejectUnauthorized: false, // Required for many cloud Postgres providers including Neon
-    },
-  });
+    };
+  }
+  
+  pool = new Pool(poolConfig);
 
   return pool;
 }

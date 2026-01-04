@@ -85,12 +85,11 @@ export async function POST(
       );
     }
 
-    // Step 2: Translate to Chinese (optimized for speed)
+    // Step 2: Translate to Chinese (using deepseek with streaming)
     const translation = await translateText(
       sourceText,
       'en-US',
-      'zh-CN',
-      'gpt-5'
+      'zh-CN'
     );
 
     // Step 3 & 4: Save to conversation_turns and update session (fire and forget)

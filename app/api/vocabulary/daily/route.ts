@@ -689,7 +689,7 @@ Return ONLY the JSON object. Start with { and end with }. No other text.`;
   ): Promise<string> => {
     for (let attempt = 0; attempt <= retries; attempt++) {
       try {
-        const result = await translateText(text, 'en-US', 'zh-CN', 'gpt-5');
+        const result = await translateText(text, 'en-US', 'zh-CN');
         if (result.translatedText && result.translatedText.trim()) {
           return result.translatedText;
         }

@@ -28,7 +28,20 @@ export function speakText(
     window.speechSynthesis.cancel();
 
     const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = options.language;
+    
+    // On mobile browsers, some language codes might not be supported
+    // Try alternative codes if the primary one fails
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    let languageCode = options.language;
+    
+    // For Chinese on mobile, try alternative language codes
+    if (isMobile && options.language === 'zh-CN') {
+      // Some mobile browsers support 'zh' or 'zh-CN' differently
+      // We'll try zh-CN first, but have fallback logic
+      languageCode = 'zh-CN';
+    }
+    
+    utterance.lang = languageCode;
     utterance.pitch = options.pitch ?? 1;
     utterance.rate = options.rate ?? 1;
     utterance.volume = options.volume ?? 1;
@@ -68,21 +81,81 @@ export function speakText(
 
     // For iOS/Android: ensure we're ready before speaking
     // Mobile browsers need a longer delay after canceling previous speech
-    // Detect mobile browser
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    const speakDelay = isMobile ? 300 : (window.speechSynthesis.pending ? 100 : 0);
+    // Detect mobile browser (especially Android/Samsung)
+    const isAndroid = /Android/i.test(navigator.userAgent);
+    const speakDelay = isMobile ? 400 : (window.speechSynthesis.pending ? 100 : 0);
     
     setTimeout(() => {
       if (!resolved) {
         try {
           window.speechSynthesis.speak(utterance);
           
+          // Mobile browsers (especially Android): Verify speech actually started
+          // On Android, speech might silently fail if not triggered from user gesture
+          // This is especially common with Chinese (zh-CN) language
+          let speechStarted = false;
+          let startTime = Date.now();
+          let lastSpeakingState = false;
+          let retryAttempted = false;
+          
+          // Check if speech started (especially important for mobile and Chinese)
+          const startCheckInterval = setInterval(() => {
+            const isSpeaking = window.speechSynthesis.speaking || window.speechSynthesis.pending;
+            
+            if (isSpeaking && !speechStarted) {
+              speechStarted = true;
+              lastSpeakingState = true;
+              clearInterval(startCheckInterval);
+            }
+          }, 50);
+          
+          // On mobile, check if speech started after a delay
+          // If not, it might have failed silently (common with Chinese on Android)
+          setTimeout(() => {
+            clearInterval(startCheckInterval);
+            
+            // On Android, if speech didn't start after 1 second, try alternative language code
+            // This is especially important for Chinese which might not be supported as zh-CN
+            if (isAndroid && !speechStarted && !resolved && !window.speechSynthesis.speaking && !window.speechSynthesis.pending && !retryAttempted) {
+              retryAttempted = true;
+              console.warn(`Speech may not have started on Android for ${options.language}, attempting retry with alternative...`);
+              try {
+                window.speechSynthesis.cancel();
+                
+                // For Chinese, try alternative language codes
+                let retryLanguageCode = languageCode;
+                if (options.language === 'zh-CN') {
+                  // Try 'zh' as alternative (some Android browsers support this better)
+                  retryLanguageCode = 'zh';
+                }
+                
+                // Create fresh utterance for retry with alternative language code
+                const retryUtterance = new SpeechSynthesisUtterance(text);
+                retryUtterance.lang = retryLanguageCode;
+                retryUtterance.pitch = options.pitch ?? 1;
+                retryUtterance.rate = options.rate ?? 1;
+                retryUtterance.volume = options.volume ?? 1;
+                retryUtterance.onend = utterance.onend;
+                retryUtterance.onerror = utterance.onerror;
+                
+                setTimeout(() => {
+                  if (!resolved) {
+                    window.speechSynthesis.speak(retryUtterance);
+                    console.log(`Retrying with language code: ${retryLanguageCode}`);
+                  }
+                }, 200);
+              } catch (retryError) {
+                console.error('Retry failed:', retryError);
+                // If retry fails, reject the promise so the UI can handle it
+                cleanup();
+                reject(new Error(`Speech synthesis failed for ${options.language} on Android`));
+              }
+            }
+          }, isMobile ? 1000 : 0);
+          
           // iOS/Android workaround: Sometimes onend doesn't fire even when speech completes
           // Check periodically if speech has stopped (but not due to error)
           // This is a fallback for when onend doesn't fire
-          let lastSpeakingState = false;
-          let startTime = Date.now();
-          
           const checkInterval = setInterval(() => {
             if (resolved) {
               clearInterval(checkInterval);
@@ -94,6 +167,7 @@ export function speakText(
             // Track when speech actually starts
             if (!lastSpeakingState && isSpeaking) {
               lastSpeakingState = true;
+              speechStarted = true;
             }
             
             // Only resolve if speech was speaking and now stopped
@@ -101,7 +175,8 @@ export function speakText(
             const timeSinceStart = Date.now() - startTime;
             if (lastSpeakingState && !isSpeaking) {
               // Make sure enough time has passed (especially on mobile)
-              if (!isMobile || timeSinceStart >= 500) {
+              // Also ensure speech actually started (for mobile browsers that might fail silently)
+              if ((!isMobile || timeSinceStart >= 500) && speechStarted) {
                 cleanup();
                 clearInterval(checkInterval);
                 resolve();

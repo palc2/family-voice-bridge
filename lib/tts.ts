@@ -70,42 +70,19 @@ export function speakText(
     // Mobile browsers need a longer delay after canceling previous speech
     // Detect mobile browser
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-    const speakDelay = isMobile ? 200 : (window.speechSynthesis.pending ? 100 : 0);
+    const speakDelay = isMobile ? 300 : (window.speechSynthesis.pending ? 100 : 0);
     
     setTimeout(() => {
       if (!resolved) {
         try {
           window.speechSynthesis.speak(utterance);
           
-          // Mobile browsers: Verify speech actually started
-          // Sometimes speak() returns without actually starting on mobile
-          let speechStarted = false;
-          const startCheckInterval = setInterval(() => {
-            if (window.speechSynthesis.speaking || window.speechSynthesis.pending) {
-              speechStarted = true;
-              clearInterval(startCheckInterval);
-            }
-          }, 50);
-          
-          // If speech hasn't started after 500ms on mobile, try again
-          setTimeout(() => {
-            clearInterval(startCheckInterval);
-            if (!speechStarted && isMobile && !window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
-              // Try speaking again - mobile browsers sometimes need a retry
-              try {
-                window.speechSynthesis.cancel();
-                window.speechSynthesis.speak(utterance);
-                console.log('Retried speech synthesis for mobile browser');
-              } catch (retryError) {
-                console.error('Retry failed:', retryError);
-              }
-            }
-          }, 500);
-          
           // iOS/Android workaround: Sometimes onend doesn't fire even when speech completes
           // Check periodically if speech has stopped (but not due to error)
           // This is a fallback for when onend doesn't fire
           let lastSpeakingState = false;
+          let startTime = Date.now();
+          
           const checkInterval = setInterval(() => {
             if (resolved) {
               clearInterval(checkInterval);
@@ -113,22 +90,28 @@ export function speakText(
             }
             
             const isSpeaking = window.speechSynthesis.speaking || window.speechSynthesis.pending;
+            
             // Track when speech actually starts
             if (!lastSpeakingState && isSpeaking) {
               lastSpeakingState = true;
             }
-            // If speech was speaking but now stopped, and we haven't resolved, resolve now
+            
+            // Only resolve if speech was speaking and now stopped
+            // On mobile, ensure at least 500ms has passed since start to prevent premature resolution
+            const timeSinceStart = Date.now() - startTime;
             if (lastSpeakingState && !isSpeaking) {
-              cleanup();
-              clearInterval(checkInterval);
-              resolve();
+              // Make sure enough time has passed (especially on mobile)
+              if (!isMobile || timeSinceStart >= 500) {
+                cleanup();
+                clearInterval(checkInterval);
+                resolve();
+              }
             }
           }, 100);
           
           // Clear the check interval when timeout fires
           setTimeout(() => {
             clearInterval(checkInterval);
-            clearInterval(startCheckInterval);
           }, timeoutMs);
         } catch (speakError) {
           cleanup();

@@ -15,6 +15,8 @@ type SessionState =
   | 'processing-partner'
   | 'playing-chinese'
   | 'waiting-for-mom-respond'
+  | 'waiting-to-complete-after-partner'
+  | 'waiting-to-complete-after-mom'
   | 'recording-mom-response'
   | 'processing-mom-response'
   | 'completed';
@@ -111,7 +113,37 @@ export default function SessionRecorder({
       
       // Start recording
       recorder.start();
+      
+      // Set countdown immediately before state change to ensure it's visible
+      setCountdown(10);
       setState('recording-mom');
+      
+      // Auto-stop after 10 seconds with countdown
+      let remainingSeconds = 10;
+      
+      const countdownInterval = setInterval(() => {
+        remainingSeconds--;
+        if (remainingSeconds > 0) {
+          setCountdown(remainingSeconds);
+        } else {
+          clearInterval(countdownInterval);
+          countdownIntervalRef.current = null;
+          setCountdown(null);
+        }
+      }, 1000);
+      
+      countdownIntervalRef.current = countdownInterval;
+      
+      countdownRef.current = window.setTimeout(() => {
+        if (countdownIntervalRef.current) {
+          clearInterval(countdownIntervalRef.current);
+          countdownIntervalRef.current = null;
+        }
+        setCountdown(null);
+        if (recorderRef.current && recorderRef.current.state === 'recording') {
+          handleMomRecording();
+        }
+      }, 10000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start session');
     }
@@ -163,11 +195,13 @@ export default function SessionRecorder({
       };
       
       recorder.start();
+      
+      // Set countdown immediately before state change to ensure it's visible
+      setCountdown(10);
       setState('recording-partner');
       
       // Auto-stop after 10 seconds with countdown
       let remainingSeconds = 10;
-      setCountdown(remainingSeconds);
       
       const countdownInterval = setInterval(() => {
         remainingSeconds--;
@@ -199,6 +233,17 @@ export default function SessionRecorder({
 
   const handleMomRecording = async () => {
     if (!recorderRef.current || !sessionId) return;
+
+    // Clear the auto-stop timeout and countdown interval if they exist
+    if (countdownRef.current) {
+      clearTimeout(countdownRef.current);
+      countdownRef.current = null;
+    }
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    setCountdown(null);
 
     try {
       setState('processing-mom');
@@ -249,7 +294,12 @@ export default function SessionRecorder({
       
       // Play English translation
       setState('playing-english');
-      await speakText(data.translatedText, { language: 'en-US' });
+      try {
+        await speakText(data.translatedText, { language: 'en-US' });
+      } catch (audioError) {
+        console.error('Audio playback error (non-critical):', audioError);
+        // Continue even if audio fails - don't block the flow
+      }
       
       // After playback, enter waiting state for user to click "Respond"
       setState('waiting-for-respond');
@@ -269,13 +319,70 @@ export default function SessionRecorder({
     setState('waiting-for-respond');
   };
 
-  const repeatChineseTranslation = async () => {
+  const repeatChineseTranslation = async (returnToState?: SessionState) => {
     if (!cachedChineseTranslation) return;
+    
+    // Store the state to return to (passed as parameter or use current state)
+    const targetState = returnToState || state;
     
     // Replay cached Chinese translation immediately (no API calls)
     setState('playing-chinese');
-    await speakText(cachedChineseTranslation, { language: 'zh-CN' });
-    setState('waiting-for-mom-respond');
+    try {
+      await speakText(cachedChineseTranslation, { language: 'zh-CN' });
+    } catch (audioError) {
+      console.error('Audio playback error (non-critical):', audioError);
+    }
+    
+    // Return to the appropriate waiting state
+    if (targetState === 'waiting-to-complete-after-partner') {
+      // Return to completion state - don't complete yet, user must click Continue
+      setState('waiting-to-complete-after-partner');
+    } else {
+      setState('waiting-for-mom-respond');
+    }
+  };
+
+  const repeatEnglishTranslationForCompletion = async () => {
+    if (!cachedEnglishTranslation) return;
+    
+    // Replay cached English translation immediately (no API calls)
+    setState('playing-english');
+    try {
+      await speakText(cachedEnglishTranslation, { language: 'en-US' });
+    } catch (audioError) {
+      console.error('Audio playback error (non-critical):', audioError);
+    }
+    
+    // Return to completion state - don't complete yet, user must click Continue
+    setState('waiting-to-complete-after-mom');
+  };
+
+  const completeSessionAfterPartner = () => {
+    // Tag the conversation in background (non-blocking)
+    if (sessionId) {
+      fetch(`/api/sessions/${sessionId}/tag`, {
+        method: 'POST',
+      }).catch(err => {
+        console.error('Background tagging failed (non-critical):', err);
+      });
+    }
+    
+    setState('completed');
+    onSessionComplete?.();
+  };
+
+  const completeSessionAfterMom = () => {
+    // Tag the conversation in background (non-blocking)
+    if (sessionId) {
+      fetch(`/api/sessions/${sessionId}/tag`, {
+        method: 'POST',
+      }).catch(err => {
+        console.error('Background tagging failed (non-critical):', err);
+      });
+    }
+    
+    setState('completed');
+    onSessionComplete?.();
   };
 
   const startPartnerRecording = async () => {
@@ -298,11 +405,13 @@ export default function SessionRecorder({
       
       // Start recording
       partnerRecorder.start();
+      
+      // Set countdown immediately before state change to ensure it's visible
+      setCountdown(10);
       setState('recording-partner');
       
       // Auto-stop after 10 seconds with countdown
       let remainingSeconds = 10;
-      setCountdown(remainingSeconds);
       
       const countdownInterval = setInterval(() => {
         remainingSeconds--;
@@ -389,12 +498,22 @@ export default function SessionRecorder({
 
       const data = await response.json();
       
+      // Check if translation exists
+      if (!data.translatedText || data.translatedText.trim() === '') {
+        throw new Error('Translation not available');
+      }
+      
       // Cache the Chinese translation for repeat functionality
       setCachedChineseTranslation(data.translatedText);
       
       // Play Chinese translation
       setState('playing-chinese');
-      await speakText(data.translatedText, { language: 'zh-CN' });
+      try {
+        await speakText(data.translatedText, { language: 'zh-CN' });
+      } catch (audioError) {
+        console.error('Audio playback error (non-critical):', audioError);
+        // Continue even if audio fails - don't block the flow
+      }
       
       // After playback, enter waiting state for mom to respond
       setState('waiting-for-mom-respond');
@@ -462,19 +581,25 @@ export default function SessionRecorder({
 
       const data = await response.json();
       
-      // Play Chinese translation
+      // Check if translation exists
+      if (!data.translatedText || data.translatedText.trim() === '') {
+        throw new Error('Translation not available');
+      }
+      
+      // Cache the Chinese translation for repeat functionality
+      setCachedChineseTranslation(data.translatedText);
+      
+      // Play Chinese translation back to mom
       setState('playing-chinese');
-      await speakText(data.translatedText, { language: 'zh-CN' });
+      try {
+        await speakText(data.translatedText, { language: 'zh-CN' });
+      } catch (audioError) {
+        console.error('Audio playback error (non-critical):', audioError);
+        // Continue even if audio fails - don't block the flow
+      }
       
-      // Tag the conversation in background (non-blocking)
-      fetch(`/api/sessions/${sessionId}/tag`, {
-        method: 'POST',
-      }).catch(err => {
-        console.error('Background tagging failed (non-critical):', err);
-      });
-      
-      setState('completed');
-      onSessionComplete?.();
+      // After playback, show option to repeat translation or complete session
+      setState('waiting-to-complete-after-partner');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to process partner recording');
       setState('waiting-for-respond');
@@ -497,7 +622,37 @@ export default function SessionRecorder({
       };
       
       recorder.start();
+      
+      // Set countdown immediately before state change to ensure it's visible
+      setCountdown(10);
       setState('recording-mom-response');
+      
+      // Auto-stop after 10 seconds with countdown
+      let remainingSeconds = 10;
+      
+      const countdownInterval = setInterval(() => {
+        remainingSeconds--;
+        if (remainingSeconds > 0) {
+          setCountdown(remainingSeconds);
+        } else {
+          clearInterval(countdownInterval);
+          countdownIntervalRef.current = null;
+          setCountdown(null);
+        }
+      }, 1000);
+      
+      countdownIntervalRef.current = countdownInterval;
+      
+      countdownRef.current = window.setTimeout(() => {
+        if (countdownIntervalRef.current) {
+          clearInterval(countdownIntervalRef.current);
+          countdownIntervalRef.current = null;
+        }
+        setCountdown(null);
+        if (recorderRef.current && recorderRef.current.state === 'recording') {
+          handleMomResponse();
+        }
+      }, 10000);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to start mom response recording');
       setState('waiting-for-mom-respond');
@@ -506,6 +661,17 @@ export default function SessionRecorder({
 
   const handleMomResponse = async () => {
     if (!recorderRef.current || !sessionId) return;
+
+    // Clear the auto-stop timeout and countdown interval if they exist
+    if (countdownRef.current) {
+      clearTimeout(countdownRef.current);
+      countdownRef.current = null;
+    }
+    if (countdownIntervalRef.current) {
+      clearInterval(countdownIntervalRef.current);
+      countdownIntervalRef.current = null;
+    }
+    setCountdown(null);
 
     try {
       setState('processing-mom-response');
@@ -554,17 +720,15 @@ export default function SessionRecorder({
       
       // Play English translation
       setState('playing-english');
-      await speakText(data.translatedText, { language: 'en-US' });
+      try {
+        await speakText(data.translatedText, { language: 'en-US' });
+      } catch (audioError) {
+        console.error('Audio playback error (non-critical):', audioError);
+        // Continue even if audio fails - don't block the flow
+      }
       
-      // Tag the conversation in background (non-blocking)
-      fetch(`/api/sessions/${sessionId}/tag`, {
-        method: 'POST',
-      }).catch(err => {
-        console.error('Background tagging failed (non-critical):', err);
-      });
-      
-      setState('completed');
-      onSessionComplete?.();
+      // After playback, show option to repeat translation before completing
+      setState('waiting-to-complete-after-mom');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to process mom response');
       setState('waiting-for-mom-respond');
@@ -610,6 +774,10 @@ export default function SessionRecorder({
                 <span className="block">正在录音...</span>
                 <span className="block text-lg sm:text-xl text-red-500 mt-0.5">Recording...</span>
               </p>
+              <p className="text-sm sm:text-base text-gray-600">
+                <span className="block">{countdown !== null ? countdown : 10} 秒后自动停止</span>
+                <span className="block text-gray-500 mt-0.5">Auto-stopping in {countdown !== null ? countdown : 10} second{(countdown !== null ? countdown : 10) !== 1 ? 's' : ''}</span>
+              </p>
               <div className="flex justify-center space-x-1">
                 {[1, 2, 3, 4, 5].map((i) => (
                   <div
@@ -644,7 +812,7 @@ export default function SessionRecorder({
           )}
           {state === 'waiting-for-mom-respond' && (
             <p className="text-lg sm:text-xl md:text-2xl text-blue-600">
-              <span className="block">等待回复</span>
+              <span className="block">等待你的回复</span>
               <span className="block text-base sm:text-lg text-blue-500 mt-0.5">Waiting for your response</span>
             </p>
           )}
@@ -653,6 +821,10 @@ export default function SessionRecorder({
               <p className="text-xl sm:text-2xl md:text-3xl font-semibold text-red-600">
                 <span className="block">正在录音...</span>
                 <span className="block text-lg sm:text-xl text-red-500 mt-0.5">Recording...</span>
+              </p>
+              <p className="text-sm sm:text-base text-gray-600">
+                <span className="block">{countdown !== null ? countdown : 10} 秒后自动停止</span>
+                <span className="block text-gray-500 mt-0.5">Auto-stopping in {countdown !== null ? countdown : 10} second{(countdown !== null ? countdown : 10) !== 1 ? 's' : ''}</span>
               </p>
               <div className="flex justify-center space-x-1">
                 {[1, 2, 3, 4, 5].map((i) => (
@@ -680,12 +852,10 @@ export default function SessionRecorder({
                 <span className="block">对方正在录音...</span>
                 <span className="block text-lg sm:text-xl text-blue-500 mt-0.5">Partner Recording...</span>
               </p>
-              {countdown !== null && (
-                <p className="text-sm sm:text-base text-gray-600">
-                  <span className="block">{countdown} 秒后自动停止</span>
-                  <span className="block text-gray-500 mt-0.5">Auto-stopping in {countdown} second{countdown !== 1 ? 's' : ''}</span>
-                </p>
-              )}
+              <p className="text-sm sm:text-base text-gray-600">
+                <span className="block">{countdown !== null ? countdown : 10} 秒后自动停止</span>
+                <span className="block text-gray-500 mt-0.5">Auto-stopping in {countdown !== null ? countdown : 10} second{(countdown !== null ? countdown : 10) !== 1 ? 's' : ''}</span>
+              </p>
               <div className="flex justify-center space-x-1">
                 {[1, 2, 3, 4, 5].map((i) => (
                   <div
@@ -710,6 +880,18 @@ export default function SessionRecorder({
             <p className="text-lg sm:text-xl md:text-2xl text-green-600">
               <span className="block">正在播放中文翻译...</span>
               <span className="block text-base sm:text-lg text-green-500 mt-0.5">Playing Chinese translation...</span>
+            </p>
+          )}
+          {state === 'waiting-to-complete-after-partner' && (
+            <p className="text-lg sm:text-xl md:text-2xl text-blue-600">
+              <span className="block">会话完成</span>
+              <span className="block text-base sm:text-lg text-blue-500 mt-0.5">Session Complete</span>
+            </p>
+          )}
+          {state === 'waiting-to-complete-after-mom' && (
+            <p className="text-lg sm:text-xl md:text-2xl text-blue-600">
+              <span className="block">会话完成</span>
+              <span className="block text-base sm:text-lg text-blue-500 mt-0.5">Session Complete</span>
             </p>
           )}
           {state === 'completed' && (
@@ -756,7 +938,7 @@ export default function SessionRecorder({
               onClick={repeatEnglishTranslation}
               className="w-full py-3 sm:py-4 md:py-5 px-4 sm:px-6 bg-yellow-500 hover:bg-yellow-600 text-white text-lg sm:text-xl md:text-2xl font-bold rounded-lg shadow-lg transition-colors"
             >
-              <span className="block">重复翻译</span>
+              <span className="block">重播翻译</span>
               <span className="block text-base sm:text-lg md:text-xl mt-0.5 sm:mt-1">Repeat</span>
             </button>
             <button
@@ -793,10 +975,10 @@ export default function SessionRecorder({
         {state === 'waiting-for-mom-respond' && (
           <div className="space-y-2 sm:space-y-3">
             <button
-              onClick={repeatChineseTranslation}
+              onClick={() => repeatChineseTranslation('waiting-for-mom-respond')}
               className="w-full py-3 sm:py-4 md:py-5 px-4 sm:px-6 bg-yellow-500 hover:bg-yellow-600 text-white text-lg sm:text-xl md:text-2xl font-bold rounded-lg shadow-lg transition-colors"
             >
-              <span className="block">重复翻译</span>
+              <span className="block">重播翻译</span>
               <span className="block text-base sm:text-lg md:text-xl mt-0.5 sm:mt-1">Repeat</span>
             </button>
             <button
@@ -809,6 +991,25 @@ export default function SessionRecorder({
           </div>
         )}
 
+        {state === 'waiting-to-complete-after-partner' && (
+          <div className="space-y-2 sm:space-y-3">
+            <button
+              onClick={() => repeatChineseTranslation('waiting-to-complete-after-partner')}
+              className="w-full py-3 sm:py-4 md:py-5 px-4 sm:px-6 bg-yellow-500 hover:bg-yellow-600 text-white text-lg sm:text-xl md:text-2xl font-bold rounded-lg shadow-lg transition-colors"
+            >
+              <span className="block">重播翻译</span>
+              <span className="block text-base sm:text-lg md:text-xl mt-0.5 sm:mt-1">Repeat</span>
+            </button>
+            <button
+              onClick={completeSessionAfterPartner}
+              className="w-full py-4 sm:py-5 md:py-6 px-4 sm:px-6 bg-green-600 hover:bg-green-700 text-white text-xl sm:text-2xl md:text-3xl font-bold rounded-lg shadow-lg transition-colors"
+            >
+              <span className="block">继续/结束</span>
+              <span className="block text-lg sm:text-xl md:text-2xl mt-0.5 sm:mt-1">Continue</span>
+            </button>
+          </div>
+        )}
+
         {state === 'recording-mom-response' && (
           <button
             onClick={handleMomResponse}
@@ -817,6 +1018,25 @@ export default function SessionRecorder({
             <span className="block">停止录音</span>
             <span className="block text-lg sm:text-xl md:text-2xl mt-0.5 sm:mt-1">Stop Recording</span>
           </button>
+        )}
+
+        {state === 'waiting-to-complete-after-mom' && (
+          <div className="space-y-2 sm:space-y-3">
+            <button
+              onClick={repeatEnglishTranslationForCompletion}
+              className="w-full py-3 sm:py-4 md:py-5 px-4 sm:px-6 bg-yellow-500 hover:bg-yellow-600 text-white text-lg sm:text-xl md:text-2xl font-bold rounded-lg shadow-lg transition-colors"
+            >
+              <span className="block">重播翻译</span>
+              <span className="block text-base sm:text-lg md:text-xl mt-0.5 sm:mt-1">Repeat</span>
+            </button>
+            <button
+              onClick={completeSessionAfterMom}
+              className="w-full py-4 sm:py-5 md:py-6 px-4 sm:px-6 bg-green-600 hover:bg-green-700 text-white text-xl sm:text-2xl md:text-3xl font-bold rounded-lg shadow-lg transition-colors"
+            >
+              <span className="block">继续/结束</span>
+              <span className="block text-lg sm:text-xl md:text-2xl mt-0.5 sm:mt-1">Continue</span>
+            </button>
+          </div>
         )}
 
         {state === 'completed' && (

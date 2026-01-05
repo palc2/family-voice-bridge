@@ -510,9 +510,18 @@ export default function SessionRecorder({
       setState('playing-chinese');
       try {
         await speakText(data.translatedText, { language: 'zh-CN' });
+        // Verify speech actually started (especially important for mobile)
+        // Wait a bit to ensure speech synthesis has started
+        await new Promise(resolve => setTimeout(resolve, 300));
+        if (typeof window !== 'undefined' && window.speechSynthesis && !window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+          console.warn('Speech synthesis may not have started - retrying...');
+          // Retry once
+          await speakText(data.translatedText, { language: 'zh-CN' });
+        }
       } catch (audioError) {
-        console.error('Audio playback error (non-critical):', audioError);
-        // Continue even if audio fails - don't block the flow
+        console.error('Audio playback error:', audioError);
+        // Log the error but continue - user can use repeat button
+        // Don't silently fail - show error in console for debugging
       }
       
       // After playback, enter waiting state for mom to respond
@@ -593,9 +602,18 @@ export default function SessionRecorder({
       setState('playing-chinese');
       try {
         await speakText(data.translatedText, { language: 'zh-CN' });
+        // Verify speech actually started (especially important for mobile)
+        // Wait a bit to ensure speech synthesis has started
+        await new Promise(resolve => setTimeout(resolve, 300));
+        if (typeof window !== 'undefined' && window.speechSynthesis && !window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+          console.warn('Speech synthesis may not have started - retrying...');
+          // Retry once
+          await speakText(data.translatedText, { language: 'zh-CN' });
+        }
       } catch (audioError) {
-        console.error('Audio playback error (non-critical):', audioError);
-        // Continue even if audio fails - don't block the flow
+        console.error('Audio playback error:', audioError);
+        // Log the error but continue - user can use repeat button
+        // Don't silently fail - show error in console for debugging
       }
       
       // After playback, show option to repeat translation or complete session

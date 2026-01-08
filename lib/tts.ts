@@ -123,7 +123,8 @@ export function speakText(
                 window.speechSynthesis.cancel();
                 
                 // For Chinese, try alternative language codes
-                let retryLanguageCode = languageCode;
+                // Use string type to allow 'zh' as fallback (not in Language type)
+                let retryLanguageCode: string = languageCode;
                 if (options.language === 'zh-CN') {
                   // Try 'zh' as alternative (some Android browsers support this better)
                   retryLanguageCode = 'zh';

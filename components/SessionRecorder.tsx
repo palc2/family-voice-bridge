@@ -510,6 +510,15 @@ export default function SessionRecorder({
       setState('playing-chinese');
       try {
         await speakText(data.translatedText, { language: 'zh-CN' });
+        // On mobile, verify speech actually played by checking if it started
+        // Give it a moment to start (mobile browsers can be slow)
+        if (typeof window !== 'undefined' && window.speechSynthesis) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          // If speech never started, log a warning (but don't block the flow)
+          if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+            console.warn('Speech may not have started on mobile - user can use repeat button');
+          }
+        }
       } catch (audioError) {
         console.error('Audio playback error:', audioError);
         // Log the error but continue - user can use repeat button
@@ -594,6 +603,15 @@ export default function SessionRecorder({
       setState('playing-chinese');
       try {
         await speakText(data.translatedText, { language: 'zh-CN' });
+        // On mobile, verify speech actually played by checking if it started
+        // Give it a moment to start (mobile browsers can be slow)
+        if (typeof window !== 'undefined' && window.speechSynthesis) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          // If speech never started, log a warning (but don't block the flow)
+          if (!window.speechSynthesis.speaking && !window.speechSynthesis.pending) {
+            console.warn('Speech may not have started on mobile - user can use repeat button');
+          }
+        }
       } catch (audioError) {
         console.error('Audio playback error:', audioError);
         // Log the error but continue - user can use repeat button
